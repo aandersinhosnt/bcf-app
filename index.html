@@ -200,9 +200,18 @@ let lastSync = null;
 
 // ── API ──────────────────────────────────────────────────────────────────────
 async function fetchSheet(name) {
-  const r = await fetch(API + '?sheet=' + encodeURIComponent(name));
-  if (!r.ok) throw new Error('Erro ao carregar ' + name);
-  return r.json();
+  const url = API + '?sheet=' + encodeURIComponent(name);
+  const r = await fetch(url, {
+    method: 'GET',
+    redirect: 'follow',
+    headers: { 'Content-Type': 'text/plain' }
+  });
+  if (!r.ok) throw new Error('Erro HTTP ' + r.status + ' ao carregar ' + name);
+  const text = await r.text();
+  let data;
+  try { data = JSON.parse(text); } catch(e) { throw new Error('Resposta inválida: ' + text.substring(0,100)); }
+  if(data && data.error) throw new Error(data.error);
+  return data;
 }
 async function loadAll() {
   const [forn, ped, pag, cron, emb] = await Promise.all([
@@ -222,14 +231,39 @@ function fmt(v, m='USD') {
 }
 function fmtBRL(v) { return 'R$ ' + Math.round(v).toLocaleString('pt-BR'); }
 function parseDate(v) {
-  if(!v||v===''||v==='—') return null;
-  if(v instanceof Date) return v;
-  const s = String(v);
+  if(!v || v==='' || v==='—') return null;
+  if(v instanceof Date) return isNaN(v)?null:v;
+  const s = String(v).trim();
+  if(!s || s==='0' || s==='null') return null;
+
+  // DD/MM/YYYY ou D/M/YY
   let m = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})$/);
-  if(m) return new Date(m[3].length===2?'20'+m[3]:m[3], m[2]-1, m[1]);
-  m = s.match(/^(\d{4})-(\d{2})-(\d{2})$/);
-  if(m) return new Date(m[1], m[2]-1, m[3]);
-  return null;
+  if(m) return new Date(m[3].length===2?'20'+m[3]:m[3], parseInt(m[2])-1, parseInt(m[1]));
+
+  // YYYY-MM-DD
+  m = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if(m) return new Date(m[1], parseInt(m[2])-1, parseInt(m[3]));
+
+  // MM/DD/YYYY (formato americano que Sheets às vezes envia)
+  m = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  if(m) {
+    const d1 = parseInt(m[1]), d2 = parseInt(m[2]), yr = parseInt(m[3]);
+    // se primeiro número > 12, é dia/mês
+    if(d1 > 12) return new Date(yr, d2-1, d1);
+    // senão assume mês/dia (americano)
+    return new Date(yr, d1-1, d2);
+  }
+
+  // Número serial do Excel/Sheets (ex: 46123)
+  const num = parseFloat(s);
+  if(!isNaN(num) && num > 40000 && num < 60000) {
+    // Sheets usa 30/12/1899 como epoch
+    return new Date(Math.round((num - 25569) * 86400000));
+  }
+
+  // Tenta Date.parse como fallback
+  const d = new Date(s);
+  return isNaN(d) ? null : d;
 }
 function fmtDate(v) {
   const d = parseDate(v); if(!d) return '—';

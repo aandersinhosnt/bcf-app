@@ -199,25 +199,34 @@ let D = {};
 let lastSync = null;
 
 // ── API ──────────────────────────────────────────────────────────────────────
-async function fetchSheet(name) {
-  const url = API + '?sheet=' + encodeURIComponent(name);
-  const r = await fetch(url, {
-    method: 'GET',
-    redirect: 'follow',
-    headers: { 'Content-Type': 'text/plain' }
+function fetchSheet(name) {
+  return new Promise((resolve, reject) => {
+    const cbName = 'bcfcb_' + Math.random().toString(36).substring(2);
+    const script = document.createElement('script');
+    const timeout = setTimeout(() => {
+      delete window[cbName];
+      document.body.removeChild(script);
+      reject(new Error('Timeout ao carregar ' + name));
+    }, 15000);
+    window[cbName] = function(data) {
+      clearTimeout(timeout);
+      delete window[cbName];
+      document.body.removeChild(script);
+      if(data && data.error) reject(new Error(data.error));
+      else resolve(data);
+    };
+    script.src = API + '?sheet=' + encodeURIComponent(name) + '&callback=' + cbName;
+    script.onerror = () => { clearTimeout(timeout); reject(new Error('Erro ao carregar ' + name)); };
+    document.body.appendChild(script);
   });
-  if (!r.ok) throw new Error('Erro HTTP ' + r.status + ' ao carregar ' + name);
-  const text = await r.text();
-  let data;
-  try { data = JSON.parse(text); } catch(e) { throw new Error('Resposta inválida: ' + text.substring(0,100)); }
-  if(data && data.error) throw new Error(data.error);
-  return data;
 }
 async function loadAll() {
-  const [forn, ped, pag, cron, emb] = await Promise.all([
-    fetchSheet('Fornecedores'), fetchSheet('Pedidos'), fetchSheet('Pagamentos'),
-    fetchSheet('Cronograma'), fetchSheet('Embarques')
-  ]);
+  const forn = await fetchSheet('Fornecedores');
+  const ped  = await fetchSheet('Pedidos');
+  const pag  = await fetchSheet('Pagamentos');
+  const cron = await fetchSheet('Cronograma');
+  const emb  = await fetchSheet('Embarques');
+  const [,,,] = [forn, ped, pag, cron, emb]; // unused destructure kept for compat
   D = { forn, ped: ped.filter(p => val(p,'Invoice / BT') && val(p,'Invoice / BT') !== 'TOTAL'), pag: pag.filter(p => val(p,'Fornecedor') && num(p,'Valor') > 0), cron: cron.filter(r => val(r,'Fornecedor')), emb: emb.filter(r => val(r,'Fornecedor')) };
   lastSync = new Date();
 }
